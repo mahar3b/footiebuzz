@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FootieBuzz — Live Match Sentiment</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="pitch-bg"></div>
+  <div class="glow glow-1"></div>
+  <div class="glow glow-2"></div>
+
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="brand">
+        <div class="logo">⚽</div>
+        <div>
+          <h1>FootieBuzz</h1>
+          <p class="tagline">Live match sentiment intelligence</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="live-badge" id="live-badge">
+          <span class="pulse"></span>
+          LIVE
+        </div>
+        <div class="connection" id="connection-status">Connecting…</div>
+      </div>
+    </header>
+
+    <!-- Stats row -->
+    <section class="stats-grid" id="stats-grid">
+      <article class="stat-card">
+        <span class="stat-label">Tweets analyzed</span>
+        <span class="stat-value" id="stat-total">0</span>
+      </article>
+      <article class="stat-card highlight-green">
+        <span class="stat-label">Avg sentiment</span>
+        <span class="stat-value" id="stat-avg">0.00</span>
+        <span class="stat-sub" id="stat-avg-label">Neutral</span>
+      </article>
+      <article class="stat-card">
+        <span class="stat-label">Positive</span>
+        <span class="stat-value positive" id="stat-pos">0</span>
+      </article>
+      <article class="stat-card">
+        <span class="stat-label">Neutral</span>
+        <span class="stat-value neutral" id="stat-neu">0</span>
+      </article>
+      <article class="stat-card">
+        <span class="stat-label">Negative</span>
+        <span class="stat-value negative" id="stat-neg">0</span>
+      </article>
+    </section>
+
+    <!-- Entity tracker (demo) -->
+    <section class="panel panel-tracker">
+      <div class="panel-header">
+        <div>
+          <h2>Featured: Argentina vs Mbappé</h2>
+          <span class="panel-hint demo-badge">DEMO — click a card to drill down</span>
+        </div>
+        <span class="tracker-active" id="tracker-active-label">Showing: All mentions</span>
+      </div>
+      <div class="featured-matchup" id="featured-matchup">
+        <!-- filled by JS: Argentina vs Mbappé -->
+      </div>
+      <div class="tracker-tabs">
+        <button class="tracker-tab active" data-tab="teams">Teams</button>
+        <button class="tracker-tab" data-tab="players">Players</button>
+      </div>
+      <div class="entity-chips" id="entity-chips"></div>
+
+      <div class="entity-chart-section">
+        <div class="entity-chart-header">
+          <h3 id="entity-chart-title">Team Sentiment</h3>
+          <span class="panel-hint" id="entity-chart-hint">Positive · Neutral · Negative mentions</span>
+        </div>
+        <div class="entity-bar-chart" id="entity-bar-chart">
+          <!-- filled by JS -->
+        </div>
+      </div>
+    </section>
+
+    <!-- Keywords -->
+    <div class="keywords-bar" id="keywords-bar">
+      <span class="keywords-label">Tracking:</span>
+      <span id="keywords-list">—</span>
+    </div>
+
+    <!-- Main charts -->
+    <section class="charts-row">
+      <article class="panel panel-wide">
+        <div class="panel-header">
+          <h2>Sentiment Timeline</h2>
+          <span class="panel-hint">Rolling avg + tweet volume</span>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="timeline-chart"></canvas>
+        </div>
+      </article>
+      <article class="panel">
+        <div class="panel-header">
+          <h2>Distribution</h2>
+        </div>
+        <div class="chart-wrap chart-donut">
+          <canvas id="distribution-chart"></canvas>
+        </div>
+      </article>
+    </section>
+
+    <!-- Shifts + Events -->
+    <section class="charts-row">
+      <article class="panel panel-wide">
+        <div class="panel-header">
+          <h2>Opinion Shifts</h2>
+          <span class="panel-hint">Before vs after goals & upsets (±2 min)</span>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="shift-chart"></canvas>
+        </div>
+      </article>
+      <article class="panel">
+        <div class="panel-header">
+          <h2>Log Moment</h2>
+        </div>
+        <form class="event-form" id="event-form">
+          <select id="event-type">
+            <option value="Goal">⚽ Goal</option>
+            <option value="Upset">🔥 Upset</option>
+            <option value="Red Card">🟥 Red Card</option>
+            <option value="Custom">📌 Custom</option>
+          </select>
+          <input type="text" id="event-desc" placeholder="e.g. Messi 78' — 2-1" maxlength="200" />
+          <button type="submit">Add Event</button>
+        </form>
+        <div class="event-feedback" id="event-feedback"></div>
+        <div class="events-list" id="events-list"></div>
+      </article>
+    </section>
+
+    <!-- Tweet feed -->
+    <section class="panel panel-feed">
+      <div class="panel-header">
+        <h2>Live Tweet Feed</h2>
+        <span class="panel-hint" id="feed-count">0 in window</span>
+      </div>
+      <div class="tweet-feed" id="tweet-feed">
+        <div class="tweet-empty">Waiting for tweets…</div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      FootieBuzz · Tweepy + Hugging Face + FastAPI · <span id="ws-latency">—</span>
+    </footer>
+  </div>
+
+  <script src="/static/js/app.js?v=3"></script>
+</body>
+</html>

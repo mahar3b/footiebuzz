@@ -1,128 +1,116 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 
-import tweepy
-
-from config.settings import DEFAULT_KEYWORDS, TWITTER_BEARER_TOKEN
-from src.analysis.sentiment import SentimentAnalyzer
+from config.settings import DEFAULT_KEYWORDS
+from src.analysis.sentiment import get_analyzer
 from src.storage.buffer import MatchEvent, TweetRecord, tweet_buffer
 
 logger = logging.getLogger(__name__)
 
+# Argentina-focused demo tweets
+ARGENTINA_SAMPLES: list[tuple[str, str | None]] = [
+    ("Argentina are absolutely world class tonight!", None),
+    ("The Albiceleste are on another level — what a team!", None),
+    ("Argentina's defense is a disgrace, shocking performance.", None),
+    ("Messi leads Argentina to a stunning comeback!", "goal"),
+    ("Argentina fans erupting — this is their moment!", "goal"),
+    ("Scaloni has Argentina playing beautiful football.", None),
+    ("Argentina look tired, running out of steam.", None),
+    ("GOOOAL! Argentina take the lead!", "goal"),
+    ("The whole of Argentina is celebrating right now!", "goal"),
+    ("Argentina bottled it again, same old story.", None),
+]
 
-class MatchTweetStream(tweepy.StreamingClient):
-    """Filtered Twitter stream that scores tweets and logs match moments."""
+# Mbappé-focused demo tweets
+MBAPPE_SAMPLES: list[tuple[str, str | None]] = [
+    ("Mbappé is unstoppable — best player on the pitch!", None),
+    ("Kylian Mbappé with a rocket into the top corner!", "goal"),
+    ("Mbappé was incredible tonight, pure class.", "goal"),
+    ("Mbappé goes quiet in big games as always.", None),
+    ("That Mbappé run was pure pace and power!", None),
+    ("Mbappé penalty! France back in it!", "goal"),
+    ("Mbappé is the future of football, what a talent.", None),
+    ("Mbappé missed a sitter — France fans furious.", None),
+    ("Mbappé vs the world and he's winning!", None),
+    ("France win thanks to Mbappé's brilliance!", "goal"),
+]
 
-    def __init__(self, keywords: list[str] | None = None) -> None:
-        if not TWITTER_BEARER_TOKEN:
-            raise ValueError(
-                "TWITTER_BEARER_TOKEN is missing. Copy .env.example to .env and add your token."
+OTHER_SAMPLES: list[tuple[str, str | None]] = [
+    ("What a goal! Absolutely brilliant finish!", "goal"),
+    ("This is the biggest upset of the tournament!", "upset"),
+    ("Neutral possession, nothing happening.", None),
+    ("Best match of the World Cup so far!", None),
+    ("Comeback of the century, unbelievable!", "upset"),
+]
+
+
+def _pick_sample() -> tuple[str, str | None]:
+    roll = random.random()
+    if roll < 0.45:
+        return random.choice(ARGENTINA_SAMPLES)
+    if roll < 0.90:
+        return random.choice(MBAPPE_SAMPLES)
+    return random.choice(OTHER_SAMPLES)
+
+
+def seed_featured_demo_tweets() -> None:
+    """Pre-load tweets so Argentina & Mbappé show data immediately."""
+    analyzer = get_analyzer()
+    now = datetime.now(timezone.utc)
+    seeds = [
+        ("Argentina are on fire! The Albiceleste look unstoppable.", None, 28),
+        ("Messi magic for Argentina — this is why he's the GOAT!", "goal", 24),
+        ("Argentina's midfield is controlling everything tonight.", None, 20),
+        ("Mbappé scores! France level it up!", "goal", 18),
+        ("Mbappé is running rings around this defense.", None, 14),
+        ("Kylian Mbappé — what a player, absolutely brilliant!", None, 10),
+        ("Argentina fans going wild after that goal!", "goal", 6),
+        ("Mbappé penalty! The crowd goes crazy!", "goal", 3),
+    ]
+
+    for text, moment, mins_ago in seeds:
+        created_at = now - timedelta(minutes=mins_ago, seconds=random.randint(0, 45))
+        label, score = analyzer.analyze(text)
+
+        tweet_buffer.add_tweet(
+            TweetRecord(
+                tweet_id=str(time.time_ns()) + str(mins_ago),
+                text=text,
+                author=random.choice(["fan_101", "footie_talk", "match_day"]),
+                created_at=created_at,
+                label=label,
+                score=score,
+                keywords_matched=["WorldCup"],
             )
-
-        super().__init__(bearer_token=TWITTER_BEARER_TOKEN, wait_on_rate_limit=True)
-        self.keywords = keywords or DEFAULT_KEYWORDS
-        self.analyzer = SentimentAnalyzer()
-        self._rules_set = False
-
-    def _build_rule(self) -> str:
-        # OR together hashtags and plain keywords
-        parts = []
-        for kw in self.keywords:
-            token = kw.lstrip("#")
-            parts.append(f"#{token}")
-            parts.append(token)
-        return " OR ".join(dict.fromkeys(parts))  # dedupe, preserve order
-
-    def setup_rules(self) -> None:
-        existing = self.get_rules()
-        if existing.data:
-            rule_ids = [rule.id for rule in existing.data]
-            self.delete_rules(rule_ids)
-
-        rule = self._build_rule()
-        self.add_rules(tweepy.StreamRule(value=rule, tag="footiebuzz-match"))
-        self._rules_set = True
-        logger.info("Stream rule active: %s", rule)
-
-    def on_tweet(self, tweet: tweepy.Tweet) -> None:
-        text = tweet.text or ""
-        author = tweet.author_id or "unknown"
-        created_at = tweet.created_at or datetime.now(timezone.utc)
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
-
-        label, score = self.analyzer.analyze(text)
-        matched = [kw for kw in self.keywords if kw.lower() in text.lower()]
-
-        record = TweetRecord(
-            tweet_id=str(tweet.id),
-            text=text,
-            author=str(author),
-            created_at=created_at,
-            label=label,
-            score=score,
-            keywords_matched=matched,
         )
-        tweet_buffer.add_tweet(record)
 
-        moment = self.analyzer.detect_match_moment(text)
         if moment:
-            event_label = "Goal" if moment == "goal" else "Upset"
             tweet_buffer.add_event(
                 MatchEvent(
-                    label=event_label,
+                    label="Goal" if moment == "goal" else "Upset",
                     timestamp=created_at,
-                    description=text[:120],
+                    description=text,
                 )
             )
-            logger.info("Detected %s moment from tweet %s", event_label, tweet.id)
 
-    def on_errors(self, errors) -> bool:
-        logger.error("Stream errors: %s", errors)
-        return True  # keep stream alive
-
-    def on_connection_error(self) -> None:
-        logger.warning("Twitter connection error — stream will retry")
-
-    def on_request_error(self, status_code: int) -> bool:
-        logger.error("Twitter request error: %s", status_code)
-        return status_code != 403
-
-    def start_background(self) -> threading.Thread:
-        if not self._rules_set:
-            self.setup_rules()
-
-        thread = threading.Thread(target=self.filter, daemon=True)
-        thread.start()
-        logger.info("Twitter stream started in background thread")
-        return thread
+    logger.info("Seeded %d featured demo tweets (Argentina & Mbappé)", len(seeds))
 
 
 def start_demo_feed(keywords: list[str] | None = None) -> threading.Thread:
-    """Simulate tweets when you don't have API access yet."""
-    import random
-    import time
-
-    analyzer = SentimentAnalyzer()
-    samples = [
-        ("What a goal! Absolutely brilliant finish!", "goal"),
-        ("Terrible defending, we deserve to lose.", None),
-        ("This is the biggest upset of the tournament!", "upset"),
-        ("Neutral possession, nothing happening.", None),
-        ("GOOOAL!!! The crowd goes wild!", "goal"),
-        ("Shocking performance from the favorites.", "upset"),
-        ("Best match of the World Cup so far!", None),
-        ("Penalty!!! No way that was a foul.", "goal"),
-        ("Comeback of the century, unbelievable!", "upset"),
-    ]
+    """Simulate tweets — no Twitter API or tweepy required."""
+    seed_featured_demo_tweets()
+    analyzer = get_analyzer()
 
     def _run() -> None:
         kws = keywords or DEFAULT_KEYWORDS
+        authors = ["fan_101", "footie_talk", "match_day", "ultras_zone", "tactics_guru"]
         while True:
-            text, moment = random.choice(samples)
+            text, moment = _pick_sample()
             now = datetime.now(timezone.utc)
             label, score = analyzer.analyze(text)
 
@@ -130,7 +118,7 @@ def start_demo_feed(keywords: list[str] | None = None) -> threading.Thread:
                 TweetRecord(
                     tweet_id=str(time.time_ns()),
                     text=text,
-                    author="demo_user",
+                    author=random.choice(authors),
                     created_at=now,
                     label=label,
                     score=score,
@@ -147,9 +135,9 @@ def start_demo_feed(keywords: list[str] | None = None) -> threading.Thread:
                     )
                 )
 
-            time.sleep(random.uniform(1.5, 4.0))
+            time.sleep(random.uniform(1.5, 3.5))
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    logger.info("Demo tweet feed started (no Twitter API required)")
+    logger.info("Demo tweet feed started — featuring Argentina & Mbappé")
     return thread
